@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const API_URL: &str =
-    "https://api.github.com/repos/Akiraoo/SimplePlayer-Windows-APP/releases?per_page=10";
+    "https://api.github.com/repos/Akiraoo/SimplePlayer-Desktop-APP/releases?per_page=10";
 
 #[derive(Deserialize)]
 struct Release {

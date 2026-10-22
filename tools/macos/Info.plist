@@ -24,6 +24,9 @@
 	<string>public.app-category.music</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- a music player must not be throttled (App Nap) while its window is hidden -->
+	<key>NSAppSleepDisabled</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Akiraoo · Apache-2.0</string>
 </dict>

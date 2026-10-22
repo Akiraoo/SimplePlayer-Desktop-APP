@@ -378,9 +378,21 @@ struct Output {
     excl_for: u32,
 }
 
-/// Tells Windows this is an audio thread ("Pro Audio" scheduling class), so it keeps
-/// getting CPU time on a busy system — fewer dropouts, especially in exclusive mode.
+/// Tells the system this is an audio thread, so it keeps getting CPU time on a busy system —
+/// fewer dropouts, especially in exclusive mode. Windows: the "Pro Audio" scheduling class.
+/// macOS: the highest QoS class, so the thread runs on the performance cores and isn't
+/// slowed down with the rest of the app when the window is in the background.
 fn boost_audio_thread() {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        }
+    }
     #[cfg(windows)]
     {
         #[link(name = "avrt")]
@@ -1110,6 +1122,9 @@ struct State {
 }
 
 fn decoder_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, on_event: impl Fn(PlayerEvent)) {
+    // the decoder must keep ahead of the device too (on Windows it only gets the default)
+    #[cfg(target_os = "macos")]
+    boost_audio_thread();
     let mut st = State::default();
     loop {
         // Wait for a command when idle; otherwise just peek between blocks.

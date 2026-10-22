@@ -135,7 +135,7 @@ export component MainWindow inherits Window {
     in-out property <bool> auto-update: true;
     callback auto-update-toggled(bool);
     in property <bool> update-available: false;
-    in property <string> update-url: "https://github.com/Akiraoo/SimplePlayer-Windows-APP/releases";
+    in property <string> update-url: "https://github.com/Akiraoo/SimplePlayer-Desktop-APP/releases";
     in property <string> update-status;
     in property <bool> update-checking: false;
     callback check-update();
@@ -1284,13 +1284,13 @@ export component MainWindow inherits Window {
                         width: gh.preferred-width;
                         height: gh.preferred-height;
                         gh := Text {
-                            text: "github.com/Akiraoo/SimplePlayer-Windows-APP";
+                            text: "github.com/Akiraoo/SimplePlayer-Desktop-APP";
                             color: ghta.has-hover ? Palette.accent-hover : Palette.accent;
                             font-size: 11px;
                         }
                         ghta := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.open-url("https://github.com/Akiraoo/SimplePlayer-Windows-APP"); }
+                            clicked => { root.open-url("https://github.com/Akiraoo/SimplePlayer-Desktop-APP"); }
                         }
                     }
                 }
