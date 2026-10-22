@@ -2322,6 +2322,10 @@ fn open_in_mini(paths: &[PathBuf]) {
 
 fn main() -> Result<(), slint::PlatformError> {
     install_crash_log();
+    // Slint draws its right-click menus itself instead of using native (muda) menus. Native
+    // ones would take over muda's single, process-wide menu event handler, and the tray /
+    // menu bar icon's menu (also muda) would then stop receiving clicks.
+    std::env::set_var("SLINT_NO_MUDA", "1");
     // "--mini <files>" (double-clicked files) or files given directly: the mini player.
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let mini_mode = args.first().is_some_and(|a| a.as_os_str() == "--mini");

@@ -26,7 +26,7 @@ rfd = "0.15"
 # and the tray / menu bar icon
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 souvlaki = "0.8"
-tray-icon = "0.19"
+tray-icon = "0.24"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 png = "0.17"
