@@ -3,8 +3,11 @@
 #   - Windows: SimplePlayer.exe (a compile check; the installer is still made with Build-Release.bat)
 #
 # Runs on every push to main, on pull requests, and by hand (Actions → Build → Run workflow).
-# The files are under the run's "Artifacts". Pushing a tag like v2.1.0 also attaches the
-# .dmg to a draft GitHub Release with that tag.
+# The files are under the run's "Artifacts".
+#
+# Pushes are test builds: Apple Silicon only and the quicker "ci" profile (Cargo.toml).
+# A tag like v2.1.0 makes the real thing — universal (Apple Silicon + Intel), full release
+# optimisation — and attaches the .dmg to a draft GitHub Release with that tag.
 name: Build
 
 on:
@@ -16,6 +19,11 @@ on:
 
 permissions:
   contents: write
+
+# a newer push cancels the build still running for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,14 +60,21 @@ jobs:
           lipo -create ffmpeg-out/macos-arm64/bin/ffmpeg ffmpeg-out/macos-x86_64/bin/ffmpeg -output ffmpeg-out/ffmpeg
           lipo -info ffmpeg-out/ffmpeg
 
-      - name: Build Simple Player (universal)
+      - name: Build Simple Player
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          lipo -create \
-            target/aarch64-apple-darwin/release/SimplePlayer \
-            target/x86_64-apple-darwin/release/SimplePlayer \
-            -output SimplePlayer
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # release: universal, full optimisation
+            cargo build --release --target aarch64-apple-darwin
+            cargo build --release --target x86_64-apple-darwin
+            lipo -create \
+              target/aarch64-apple-darwin/release/SimplePlayer \
+              target/x86_64-apple-darwin/release/SimplePlayer \
+              -output SimplePlayer
+          else
+            # test build: Apple Silicon only, quicker profile
+            cargo build --profile ci --target aarch64-apple-darwin
+            cp target/aarch64-apple-darwin/ci/SimplePlayer SimplePlayer
+          fi
           lipo -info SimplePlayer
 
       - name: Make .app and .dmg
@@ -110,9 +125,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            cargo build --release
+            cp target/release/SimplePlayer.exe SimplePlayer.exe
+          else
+            cargo build --profile ci
+            cp target/ci/SimplePlayer.exe SimplePlayer.exe
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: SimplePlayer-Windows
-          path: target/release/SimplePlayer.exe
+          path: SimplePlayer.exe

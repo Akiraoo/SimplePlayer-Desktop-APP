@@ -441,7 +441,30 @@ impl Output {
         };
         let ok = o.open().is_ok();
         let _ = ready.send(ok || o.stream.is_some());
+        // diagnostics (printed when started from a terminal): how fast the device really
+        // takes samples, compared with the rate it was opened at, and how often it ran dry
+        let mut stat_at = std::time::Instant::now();
+        let mut stat_played = o.shared.played.load(Ordering::Relaxed);
+        let mut stat_under = o.shared.underruns.load(Ordering::Relaxed);
         loop {
+            if stat_at.elapsed() >= Duration::from_secs(3) {
+                let played = o.shared.played.load(Ordering::Relaxed);
+                let under = o.shared.underruns.load(Ordering::Relaxed);
+                let secs = stat_at.elapsed().as_secs_f64();
+                if !o.shared.paused.load(Ordering::Relaxed) && played >= stat_played {
+                    let queued = o.shared.queue.lock().map(|q| q.len() / 2).unwrap_or(0);
+                    eprintln!(
+                        "output: {:.0} frames/s taken (opened at {} Hz), {} underruns, {} frames queued",
+                        (played - stat_played) as f64 / secs,
+                        o.shared.out_rate.load(Ordering::Relaxed),
+                        under.saturating_sub(stat_under),
+                        queued
+                    );
+                }
+                stat_at = std::time::Instant::now();
+                stat_played = played;
+                stat_under = under;
+            }
             #[cfg(windows)]
             if o.excl.is_some() {
                 // exclusive: keep feeding the device, look at commands in between
@@ -748,6 +771,13 @@ fn open_output_at(
         None => device.default_output_config().ok()?,
     };
     let channels = config.channels() as usize;
+    eprintln!(
+        "output: {} — {} Hz, {} ch, {:?}",
+        device.name().unwrap_or_default(),
+        config.sample_rate().0,
+        channels,
+        config.sample_format()
+    );
     shared
         .out_rate
         .store(config.sample_rate().0, Ordering::Relaxed);
