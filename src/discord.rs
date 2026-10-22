@@ -140,8 +140,13 @@ fn open_pipe(i: u32) -> std::io::Result<Box<dyn Pipe>> {
 
 #[cfg(unix)]
 fn open_pipe(i: u32) -> std::io::Result<Box<dyn Pipe>> {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    let s = std::os::unix::net::UnixStream::connect(format!("{dir}/discord-ipc-{i}"))?;
+    // Linux: $XDG_RUNTIME_DIR; macOS: the per-user $TMPDIR (/var/folders/…)
+    let dir = ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| "/tmp".into());
+    let path = std::path::Path::new(&dir).join(format!("discord-ipc-{i}"));
+    let s = std::os::unix::net::UnixStream::connect(path)?;
     Ok(Box::new(s))
 }
 

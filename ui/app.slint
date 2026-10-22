@@ -106,6 +106,8 @@ export component MainWindow inherits Window {
     in property <int> repeat-mode: 0; // 0 off, 1 all, 2 one
     in property <bool> queue-view: false;
     in-out property <bool> close-to-tray: true;
+    // false on macOS: no tray icon and no WASAPI, so those settings are hidden
+    in property <bool> is-windows: true;
     // audio output devices; index 0 = system default
     in property <[string]> output-devices: [(Lang.en ? "System default" : "系統預設")];
     in-out property <int> output-index: 0;
@@ -850,8 +852,8 @@ export component MainWindow inherits Window {
                                         }
                                         VerticalLayout { alignment: center; Pill { label: (Lang.en ? "Apply" : "套用"); clicked => { root.accent-picked(root.accent-hex); } } }
                                     }
-                                    Rectangle { height: 1px; background: Palette.line; }
-                                    HorizontalLayout {
+                                    if root.is-windows: Rectangle { height: 1px; background: Palette.line; }
+                                    if root.is-windows: HorizontalLayout {
                                         spacing: 12px;
                                         VerticalLayout {
                                             horizontal-stretch: 1;
@@ -961,7 +963,7 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                     }
-                                    HorizontalLayout {
+                                    if root.is-windows: HorizontalLayout {
                                         spacing: 12px;
                                         VerticalLayout {
                                             horizontal-stretch: 1;

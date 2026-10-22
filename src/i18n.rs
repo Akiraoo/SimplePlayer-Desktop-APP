@@ -14,7 +14,7 @@ pub fn set_english(on: bool) {
     EN.store(on, Ordering::Relaxed);
 }
 
-/// Language for a first start: Chinese when Windows is set to Chinese, otherwise English.
+/// Language for a first start: Chinese when the system is set to Chinese, otherwise English.
 pub fn system_is_chinese() -> bool {
     #[cfg(windows)]
     {
@@ -30,7 +30,26 @@ pub fn system_is_chinese() -> bool {
         }
         true
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        // apps opened from Finder get no LANG; ask for the preferred languages instead
+        if let Ok(out) = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLanguages"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+            // "(\n    \"zh-Hant-TW\",\n    en\n)": the first entry wins
+            if let Some(first) = text
+                .split(|c: char| c == '(' || c == ',' || c == ')')
+                .map(|s| s.trim().trim_matches('"'))
+                .find(|s| !s.is_empty())
+            {
+                return first.starts_with("zh");
+            }
+        }
+        true
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         std::env::var("LANG")
             .map(|l| l.to_ascii_lowercase().starts_with("zh"))

@@ -1,9 +1,9 @@
 [package]
-name = "simpleplayer-windows"
+name = "simpleplayer-desktop"
 version = "2.0.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Simple Player for Windows: local library + Simple Player Web Server, with Discord Rich Presence"
+description = "Simple Player for Windows and macOS: local library + Simple Player Web Server, with Discord Rich Presence"
 
 [[bin]]
 name = "SimplePlayer"
@@ -22,8 +22,11 @@ walkdir = "2"
 dirs = "6"
 rfd = "0.15"
 
-[target.'cfg(windows)'.dependencies]
+# media keys / Now Playing (Windows: System Media Transport Controls, macOS: Now Playing)
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 souvlaki = "0.8"
+
+[target.'cfg(windows)'.dependencies]
 tray-icon = "0.19"
 wasapi = "=0.15.0"
 

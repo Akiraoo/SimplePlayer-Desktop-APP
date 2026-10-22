@@ -5208,7 +5208,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "simpleplayer-windows"
+name = "simpleplayer-desktop"
 version = "2.0.0"
 dependencies = [
  "cpal",

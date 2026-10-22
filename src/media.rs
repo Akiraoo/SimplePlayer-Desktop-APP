@@ -1,4 +1,5 @@
-//! Windows System Media Transport Controls (volume flyout, lock screen, media keys).
+//! System media controls: Windows System Media Transport Controls (volume flyout, lock
+//! screen, media keys) and macOS Now Playing (Control Center, media keys).
 
 #[derive(Clone, Copy, Debug)]
 pub enum MediaKey {
@@ -10,7 +11,7 @@ pub enum MediaKey {
     Stop,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod imp {
     use super::MediaKey;
     use souvlaki::{
@@ -28,10 +29,18 @@ mod imp {
             hwnd: *mut std::ffi::c_void,
             on_key: impl Fn(MediaKey) + Send + 'static,
         ) -> Option<Media> {
+            // Windows ties the controls to our window; macOS doesn't use a window handle
+            #[cfg(windows)]
+            let hwnd = Some(hwnd);
+            #[cfg(not(windows))]
+            let hwnd = {
+                let _ = hwnd;
+                None
+            };
             let config = PlatformConfig {
                 dbus_name: "simpleplayer",
                 display_name: "Simple Player",
-                hwnd: Some(hwnd),
+                hwnd,
             };
             let mut controls = MediaControls::new(config).ok()?;
             controls
@@ -79,7 +88,7 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::MediaKey;
 

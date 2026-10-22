@@ -2345,6 +2345,7 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.global::<Lang>().set_en(i18n::english());
     pw.global::<Lang>().set_en(i18n::english());
     ui.set_auto_update(cfg.auto_update);
+    ui.set_is_windows(cfg!(windows));
     ui.set_replaygain_mode(cfg.replaygain as i32);
 
     let player = Player::new(
@@ -2796,11 +2797,14 @@ fn main() -> Result<(), slint::PlatformError> {
     accept_drops(pw.window());
 
     // Windows media controls need the native window handle, which exists once shown.
+    // (macOS Now Playing doesn't use one.)
     let weak = ui.as_weak();
     slint::Timer::single_shot(Duration::from_millis(300), move || {
         let Some(ui) = weak.upgrade() else { return };
-        let Some(hwnd) = window_hwnd(ui.window()) else {
-            return;
+        let hwnd = match window_hwnd(ui.window()) {
+            Some(h) => h,
+            None if cfg!(windows) => return,
+            None => std::ptr::null_mut(),
         };
         window_chrome(ui.window(), hwnd);
         let media = media::Media::new(hwnd, |key| post(move |app| app.handle_media_key(key)));

@@ -99,7 +99,11 @@ pub fn open_url(url: &str) {
             );
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }

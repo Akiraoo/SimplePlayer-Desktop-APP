@@ -1,8 +1,8 @@
-# Simple Player for Windows
+# Simple Player Desktop
 
-Simple Player 的 Windows 客戶端：本地音樂和 [Simple Player Web Server](https://github.com/Akiraoo/SimplePlayer-Web-Server) 的曲庫放在同一個播放器裡，內建 Discord 狀態顯示。用 Rust + [Slint](https://slint.dev) 寫成，不使用瀏覽器核心，記憶體占用低。
+Simple Player 的桌面客戶端（Windows、macOS）：本地音樂和 [Simple Player Web Server](https://github.com/Akiraoo/SimplePlayer-Web-Server) 的曲庫放在同一個播放器裡，內建 Discord 狀態顯示。用 Rust + [Slint](https://slint.dev) 寫成，不使用瀏覽器核心，記憶體占用低。
 
-> 目前版本：v2.0.0。介面支援繁體中文與 English。
+> 目前版本：v2.0.0。介面支援繁體中文與 English。macOS 版目前是測試版，見下方「macOS」。
 
 ## 功能
 
@@ -44,6 +44,30 @@ Run-Mini.bat <檔案>          # 測試迷你播放器（也可以把檔案拖�
 ```
 
 安裝包附帶的精簡版 FFmpeg（僅音訊解碼，LGPL）放在 `vendor\ffmpeg.exe`，編譯方式與授權說明見 `tools\ffmpeg-lite`。
+
+## macOS（測試版）
+
+macOS 版由 GitHub Actions 自動編譯（`.github/workflows/build.yml`），是同時支援 Apple Silicon 和 Intel 的通用版，附帶精簡版 FFmpeg。下載：Actions → 最新一次「Build」→ Artifacts 的 `SimplePlayer-macOS`；推送 `v*` 標籤時也會附加到草稿 Release。
+
+* 需要 macOS 11 以上
+* 打開 `.dmg`，把 Simple Player 拖進「應用程式」
+* 沒有經過 Apple 公證，第一次開啟要在 App 上按右鍵 →「打開」；被擋下時在終端機執行：
+  ```
+  xattr -cr "/Applications/Simple Player.app"
+  ```
+* 和 Windows 版的差異：
+  * 沒有系統列圖示，按 ✕ 會直接結束
+  * 沒有 WASAPI 獨佔模式（使用 CoreAudio 共享輸出，取樣率不同時用同一套高品質轉換）
+  * 鍵盤媒體鍵和「正在播放」（控制中心）可以使用
+  * 還不能從 Finder 用「打開檔案的應用程式」開啟歌曲；把檔案拖進視窗可以開迷你播放器
+* 設定檔在 `~/Library/Application Support/SimplePlayer`，快取在 `~/Library/Caches/SimplePlayer`
+
+自己在 Mac 上編譯：
+
+```
+cargo build --release
+sh tools/macos/bundle.sh target/release/SimplePlayer - dist
+```
 
 ## 快捷鍵
 
