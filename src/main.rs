@@ -18,6 +18,8 @@ mod tray;
 mod update;
 #[cfg(windows)]
 mod wasapi_out;
+#[cfg(target_os = "macos")]
+mod hog;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -939,9 +941,9 @@ impl App {
         config::save(&self.cfg);
         let msg = match self.player.set_exclusive(on) {
             Ok(d) if on && cfg!(windows) => crate::tr!("WASAPI 獨佔：{}", "WASAPI exclusive: {}", d),
-            Ok(d) if on => crate::tr!("原生取樣率輸出：{}", "Native sample rate output: {}", d),
+            Ok(d) if on => crate::tr!("獨佔模式：{}", "Exclusive mode: {}", d),
             Ok(_) if cfg!(windows) => crate::tr!("已改回共享模式（Windows 混音）", "Back to shared mode (Windows mixer)"),
-            Ok(_) => crate::tr!("已改回固定取樣率輸出", "Back to the device's own sample rate"),
+            Ok(_) => crate::tr!("已改回共享模式（macOS 混音）", "Back to shared mode (macOS mixer)"),
             Err(e) => e,
         };
         self.flash(msg);

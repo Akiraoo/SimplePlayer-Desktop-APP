@@ -984,14 +984,14 @@ export component MainWindow inherits Window {
                                             Text {
                                                 text: root.is-windows
                                                     ? (Lang.en ? "WASAPI exclusive mode" : "WASAPI 獨佔模式")
-                                                    : (Lang.en ? "Native sample rate output" : "原生取樣率輸出");
+                                                    : (Lang.en ? "Exclusive mode" : "獨佔模式");
                                                 color: Palette.strong;
                                                 font-weight: 600;
                                             }
                                             Text {
                                                 text: root.is-windows
                                                     ? (Lang.en ? "Sends each song at its own sample rate and bit depth (bit-perfect at 100% volume), bypassing the Windows mixer. Other apps can't play on this device meanwhile." : "開啟後依歌曲本身的取樣率與位元深度直接輸出（音量 100% 時為 bit-perfect），不經 Windows 混音；播放期間其他程式在這個裝置上會沒有聲音。")
-                                                    : (Lang.en ? "Switches the output device to each song's own sample rate, so nothing is resampled (bit-perfect with the app and macOS volume at 100%). Other apps' sound follows the switched rate meanwhile." : "開啟後把輸出裝置切換成每首歌本身的取樣率，全程不做取樣率轉換（App 與 macOS 音量都在 100% 時為 bit-perfect）；播放期間其他程式的聲音也會用切換後的取樣率輸出。");
+                                                    : (Lang.en ? "Holds the output device for Simple Player alone (hog mode) and switches it to each song's own sample rate, so nothing is mixed or resampled (bit-perfect with the app and macOS volume at 100%). Other apps and system sounds can't play on this device meanwhile." : "開啟後由 Simple Player 獨佔輸出裝置（Hog Mode），並切換成每首歌本身的取樣率，不經混音也不做取樣率轉換（App 與 macOS 音量都在 100% 時為 bit-perfect）；播放期間其他程式和系統音效在這個裝置上會沒有聲音。");
                                                 color: Palette.muted;
                                                 font-size: 10px;
                                                 wrap: TextWrap.word-wrap;

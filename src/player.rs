@@ -358,8 +358,9 @@ fn device_names() -> Vec<String> {
 }
 
 /// Owns the audio output: a shared-mode cpal stream, or (Windows) a WASAPI exclusive stream
-/// that is re-opened at each song's own sample rate, or (macOS, "native rate") a cpal stream
-/// re-opened at each song's own rate, which switches the device's rate along with it. Re-opens when the device changes or
+/// that is re-opened at each song's own sample rate, or (macOS exclusive) a cpal stream
+/// re-opened at each song's own rate — which switches the device's rate along with it — on a
+/// device held in hog mode. Re-opens when the device changes or
 /// goes away (e.g. USB DAC unplugged), falling back to the system default / shared mode.
 struct Output {
     shared: Arc<Shared>,
@@ -369,6 +370,9 @@ struct Output {
     stream: Option<cpal::Stream>,
     #[cfg(windows)]
     excl: Option<crate::wasapi_out::Exclusive>,
+    /// macOS exclusive mode: the device held for us alone (kept across songs).
+    #[cfg(target_os = "macos")]
+    hog: Option<crate::hog::Hog>,
     /// Song rate the exclusive stream was opened for (the device may have picked another).
     #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     excl_for: u32,
@@ -419,6 +423,8 @@ impl Output {
             stream: None,
             #[cfg(windows)]
             excl: None,
+            #[cfg(target_os = "macos")]
+            hog: None,
             excl_for: 0,
         };
         let ok = o.open().is_ok();
@@ -508,6 +514,21 @@ impl Output {
             let want_rate = self.shared.want_rate.load(Ordering::Relaxed);
             self.excl_for = want_rate;
             let rate = if want_rate == 0 { 44_100 } else { want_rate };
+            // hold the device for ourselves (other programs go silent on it meanwhile)
+            let mut hog_err = None;
+            let dev = crate::hog::find(self.want.as_deref()).or_else(|| crate::hog::find(None));
+            if let Some(id) = dev {
+                if self.hog.as_ref().map(|h| h.device()) != Some(id) {
+                    self.hog = None;
+                    match crate::hog::Hog::take(id) {
+                        Ok(h) => self.hog = Some(h),
+                        Err(e) => {
+                            eprintln!("output: hog mode failed: {e}");
+                            hog_err = Some(e);
+                        }
+                    }
+                }
+            }
             let opened = self
                 .want
                 .as_deref()
@@ -518,8 +539,10 @@ impl Output {
             match opened {
                 Some(stream) => {
                     let got = self.shared.out_rate.load(Ordering::Relaxed);
-                    let d = if got == rate {
-                        crate::tr!("{} kHz（原生）", "{} kHz (native)", got as f64 / 1000.0)
+                    let d = if let Some(e) = &hog_err {
+                        crate::tr!("{} kHz（未獨佔：{}）", "{} kHz (not exclusive: {})", got as f64 / 1000.0, e)
+                    } else if got == rate {
+                        crate::tr!("{} kHz（獨佔）", "{} kHz (exclusive)", got as f64 / 1000.0)
                     } else {
                         crate::tr!(
                             "{} kHz（裝置不支援 {} kHz）",
@@ -542,6 +565,11 @@ impl Output {
                     self.shared.excl_ack.store(want_rate, Ordering::Relaxed);
                 }
             }
+        }
+        // shared mode: give the device back to everyone
+        #[cfg(target_os = "macos")]
+        {
+            self.hog = None;
         }
         self.shared.exclusive.store(false, Ordering::Relaxed);
         let exact = self
