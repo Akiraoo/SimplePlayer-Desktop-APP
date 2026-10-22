@@ -106,7 +106,7 @@ export component MainWindow inherits Window {
     in property <int> repeat-mode: 0; // 0 off, 1 all, 2 one
     in property <bool> queue-view: false;
     in-out property <bool> close-to-tray: true;
-    // false on macOS: no tray icon and no WASAPI, so those settings are hidden
+    // false on macOS: menu bar instead of tray, native-rate output instead of WASAPI
     in property <bool> is-windows: true;
     // audio output devices; index 0 = system default
     in property <[string]> output-devices: [(Lang.en ? "System default" : "系統預設")];
@@ -852,14 +852,27 @@ export component MainWindow inherits Window {
                                         }
                                         VerticalLayout { alignment: center; Pill { label: (Lang.en ? "Apply" : "套用"); clicked => { root.accent-picked(root.accent-hex); } } }
                                     }
-                                    if root.is-windows: Rectangle { height: 1px; background: Palette.line; }
-                                    if root.is-windows: HorizontalLayout {
+                                    Rectangle { height: 1px; background: Palette.line; }
+                                    HorizontalLayout {
                                         spacing: 12px;
                                         VerticalLayout {
                                             horizontal-stretch: 1;
                                             spacing: 2px;
-                                            Text { text: (Lang.en ? "Close to the system tray" : "關閉視窗時縮到系統列"); color: Palette.strong; font-weight: 600; }
-                                            Text { text: (Lang.en ? "The close button keeps playing in the background; choose Quit in the tray icon menu to exit." : "按關閉鈕後繼續在背景播放；從系統列圖示的選單「結束」才會完全關閉。"); color: Palette.muted; font-size: 10px; overflow: TextOverflow.elide; }
+                                            Text {
+                                                text: root.is-windows
+                                                    ? (Lang.en ? "Close to the system tray" : "關閉視窗時縮到系統列")
+                                                    : (Lang.en ? "Close to the menu bar" : "關閉視窗時縮到選單列");
+                                                color: Palette.strong;
+                                                font-weight: 600;
+                                            }
+                                            Text {
+                                                text: root.is-windows
+                                                    ? (Lang.en ? "The close button keeps playing in the background; choose Quit in the tray icon menu to exit." : "按關閉鈕後繼續在背景播放；從系統列圖示的選單「結束」才會完全關閉。")
+                                                    : (Lang.en ? "The close button keeps playing in the background; choose Quit in the menu bar icon's menu (or ⌘Q) to exit." : "按關閉鈕後繼續在背景播放；從選單列圖示的選單「結束」（或 ⌘Q）才會完全關閉。");
+                                                color: Palette.muted;
+                                                font-size: 10px;
+                                                overflow: TextOverflow.elide;
+                                            }
                                         }
                                         VerticalLayout {
                                             alignment: center;
@@ -963,14 +976,22 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                     }
-                                    if root.is-windows: HorizontalLayout {
+                                    HorizontalLayout {
                                         spacing: 12px;
                                         VerticalLayout {
                                             horizontal-stretch: 1;
                                             spacing: 2px;
-                                            Text { text: (Lang.en ? "WASAPI exclusive mode" : "WASAPI 獨佔模式"); color: Palette.strong; font-weight: 600; }
                                             Text {
-                                                text: (Lang.en ? "Sends each song at its own sample rate and bit depth (bit-perfect at 100% volume), bypassing the Windows mixer. Other apps can't play on this device meanwhile." : "開啟後依歌曲本身的取樣率與位元深度直接輸出（音量 100% 時為 bit-perfect），不經 Windows 混音；播放期間其他程式在這個裝置上會沒有聲音。");
+                                                text: root.is-windows
+                                                    ? (Lang.en ? "WASAPI exclusive mode" : "WASAPI 獨佔模式")
+                                                    : (Lang.en ? "Native sample rate output" : "原生取樣率輸出");
+                                                color: Palette.strong;
+                                                font-weight: 600;
+                                            }
+                                            Text {
+                                                text: root.is-windows
+                                                    ? (Lang.en ? "Sends each song at its own sample rate and bit depth (bit-perfect at 100% volume), bypassing the Windows mixer. Other apps can't play on this device meanwhile." : "開啟後依歌曲本身的取樣率與位元深度直接輸出（音量 100% 時為 bit-perfect），不經 Windows 混音；播放期間其他程式在這個裝置上會沒有聲音。")
+                                                    : (Lang.en ? "Switches the output device to each song's own sample rate, so nothing is resampled (bit-perfect with the app and macOS volume at 100%). Other apps' sound follows the switched rate meanwhile." : "開啟後把輸出裝置切換成每首歌本身的取樣率，全程不做取樣率轉換（App 與 macOS 音量都在 100% 時為 bit-perfect）；播放期間其他程式的聲音也會用切換後的取樣率輸出。");
                                                 color: Palette.muted;
                                                 font-size: 10px;
                                                 wrap: TextWrap.word-wrap;

@@ -56,8 +56,8 @@ macOS 版由 GitHub Actions 自動編譯（`.github/workflows/build.yml`），�
   xattr -cr "/Applications/Simple Player.app"
   ```
 * 和 Windows 版的差異：
-  * 沒有系統列圖示，按 ✕ 會直接結束
-  * 沒有 WASAPI 獨佔模式（使用 CoreAudio 共享輸出，取樣率不同時用同一套高品質轉換）
+  * 系統列圖示在 macOS 是右上角的選單列圖示；按 ✕ 縮到選單列（可在設定關閉），⌘Q 結束
+  * WASAPI 獨佔模式在 macOS 是「原生取樣率輸出」：把輸出裝置切換成每首歌本身的取樣率，不做任何取樣率轉換（App 與 macOS 音量都在 100% 時為 bit-perfect）。裝置不支援某個取樣率時，改用最接近的取樣率並以高品質轉換
   * 鍵盤媒體鍵和「正在播放」（控制中心）可以使用
   * 還不能從 Finder 用「打開檔案的應用程式」開啟歌曲；把檔案拖進視窗可以開迷你播放器
 * 設定檔在 `~/Library/Application Support/SimplePlayer`，快取在 `~/Library/Caches/SimplePlayer`

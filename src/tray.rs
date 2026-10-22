@@ -1,5 +1,7 @@
-//! System tray icon: click to show the window, menu for playback and quitting.
+//! System tray icon (macOS: menu bar icon): click to show the window, menu for playback
+//! and quitting.
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 pub enum TrayCmd {
     Show,
     TogglePlay,
@@ -8,13 +10,11 @@ pub enum TrayCmd {
     Quit,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod imp {
-    use super::TrayCmd;
+    use super::{load_icon, TrayCmd};
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-    use tray_icon::{
-        Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
-    };
+    use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
     pub struct Tray {
         icon: TrayIcon,
@@ -57,15 +57,7 @@ mod imp {
                 &quit,
             ])
             .ok()?;
-            // Icon id 1 = the .exe icon (build.rs); ask for the system's small-icon size so
-            // Windows picks the hand-tuned 16/20/24 px layer instead of shrinking a big one.
-            #[link(name = "user32")]
-            extern "system" {
-                fn GetSystemMetrics(index: i32) -> i32;
-            }
-            const SM_CXSMICON: i32 = 49;
-            let px = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16) as u32;
-            let icon = Icon::from_resource(1, Some((px, px))).ok()?;
+            let icon = load_icon()?;
             let tray = TrayIconBuilder::new()
                 .with_icon(icon)
                 .with_tooltip("Simple Player")
@@ -131,7 +123,40 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+/// Windows: the .exe icon (resource id 1, see build.rs) at the system's small-icon size, so
+/// Windows picks the hand-tuned 16/20/24 px layer instead of shrinking a big one.
+#[cfg(windows)]
+fn load_icon() -> Option<tray_icon::Icon> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetSystemMetrics(index: i32) -> i32;
+    }
+    const SM_CXSMICON: i32 = 49;
+    let px = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16) as u32;
+    tray_icon::Icon::from_resource(1, Some((px, px))).ok()
+}
+
+/// macOS: the app icon, decoded from the PNG built into the program.
+#[cfg(target_os = "macos")]
+fn load_icon() -> Option<tray_icon::Icon> {
+    let bytes: &[u8] = include_bytes!("../assets/icon-small.png");
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let px = &buf[..info.buffer_size()];
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => px.to_vec(),
+        png::ColorType::Rgb => px.chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => px.chunks(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
+        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return None, // EXPAND turns palettes into RGB(A)
+    };
+    tray_icon::Icon::from_rgba(rgba, info.width, info.height).ok()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::TrayCmd;
     pub struct Tray;

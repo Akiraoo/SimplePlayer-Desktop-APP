@@ -358,7 +358,8 @@ fn device_names() -> Vec<String> {
 }
 
 /// Owns the audio output: a shared-mode cpal stream, or (Windows) a WASAPI exclusive stream
-/// that is re-opened at each song's own sample rate. Re-opens when the device changes or
+/// that is re-opened at each song's own sample rate, or (macOS, "native rate") a cpal stream
+/// re-opened at each song's own rate, which switches the device's rate along with it. Re-opens when the device changes or
 /// goes away (e.g. USB DAC unplugged), falling back to the system default / shared mode.
 struct Output {
     shared: Arc<Shared>,
@@ -369,6 +370,7 @@ struct Output {
     #[cfg(windows)]
     excl: Option<crate::wasapi_out::Exclusive>,
     /// Song rate the exclusive stream was opened for (the device may have picked another).
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     excl_for: u32,
 }
 
@@ -433,13 +435,21 @@ impl Output {
                 o.pump_exclusive();
                 continue;
             }
-            match rx.recv_timeout(Duration::from_millis(500)) {
+            // native-rate mode (macOS) checks often whether the next song needs another rate
+            let native = cfg!(target_os = "macos") && o.shared.exclusive.load(Ordering::Relaxed);
+            let wait = Duration::from_millis(if native { 15 } else { 500 });
+            match rx.recv_timeout(wait) {
                 Ok(cmd) => o.command(cmd),
                 Err(RecvTimeoutError::Timeout) => {
                     if o.failed.swap(false, Ordering::Relaxed) {
                         o.close();
                         thread::sleep(Duration::from_millis(300));
                         let _ = o.open();
+                    } else if native {
+                        let want = o.shared.want_rate.load(Ordering::Relaxed);
+                        if want != 0 && want != o.excl_for {
+                            let _ = o.open();
+                        }
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -460,6 +470,8 @@ impl Output {
     fn open(&mut self) -> Result<String, String> {
         self.close();
         self.failed.store(false, Ordering::Relaxed);
+        // only Windows (WASAPI exclusive) and macOS (native rate) ever set it
+        #[cfg_attr(not(any(windows, target_os = "macos")), allow(unused_mut))]
         let mut excl_err = None;
         #[cfg(windows)]
         if self.exclusive {
@@ -487,6 +499,46 @@ impl Output {
                 Err(e) => {
                     eprintln!("output: exclusive failed: {e}");
                     excl_err = Some(crate::tr!("無法使用獨佔模式：{}", "Exclusive mode unavailable: {}", e));
+                    self.shared.excl_ack.store(want_rate, Ordering::Relaxed);
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.exclusive {
+            let want_rate = self.shared.want_rate.load(Ordering::Relaxed);
+            self.excl_for = want_rate;
+            let rate = if want_rate == 0 { 44_100 } else { want_rate };
+            let opened = self
+                .want
+                .as_deref()
+                .and_then(|n| {
+                    open_output_at(self.shared.clone(), Some(n), self.failed.clone(), Some(rate))
+                })
+                .or_else(|| open_output_at(self.shared.clone(), None, self.failed.clone(), Some(rate)));
+            match opened {
+                Some(stream) => {
+                    let got = self.shared.out_rate.load(Ordering::Relaxed);
+                    let d = if got == rate {
+                        crate::tr!("{} kHz（原生）", "{} kHz (native)", got as f64 / 1000.0)
+                    } else {
+                        crate::tr!(
+                            "{} kHz（裝置不支援 {} kHz）",
+                            "{} kHz (the device can't do {} kHz)",
+                            got as f64 / 1000.0,
+                            rate as f64 / 1000.0
+                        )
+                    };
+                    self.publish(d.clone());
+                    self.stream = Some(stream);
+                    self.shared.exclusive.store(true, Ordering::Relaxed);
+                    self.shared.excl_ack.store(want_rate, Ordering::Relaxed);
+                    return Ok(d);
+                }
+                None => {
+                    excl_err = Some(crate::tr!(
+                        "無法切換裝置取樣率，改用裝置原本的設定",
+                        "Couldn't switch the device's sample rate; using its own setting"
+                    ));
                     self.shared.excl_ack.store(want_rate, Ordering::Relaxed);
                 }
             }
@@ -600,6 +652,49 @@ fn open_output(
     name: Option<&str>,
     failed: Arc<AtomicBool>,
 ) -> Option<cpal::Stream> {
+    open_output_at(shared, name, failed, None)
+}
+
+/// The supported config closest to `rate`: that exact rate, else the highest rate below
+/// it, else the lowest above it (preferring 32-bit float, then the most channels ≤ 2).
+fn config_for_rate(device: &cpal::Device, rate: u32) -> Option<cpal::SupportedStreamConfig> {
+    let ranges: Vec<cpal::SupportedStreamConfigRange> =
+        device.supported_output_configs().ok()?.collect();
+    let rank = |r: &cpal::SupportedStreamConfigRange| {
+        (
+            r.sample_format() == cpal::SampleFormat::F32,
+            r.channels().min(2),
+        )
+    };
+    let pick = |rate: u32| {
+        ranges
+            .iter()
+            .filter(|r| r.min_sample_rate().0 <= rate && rate <= r.max_sample_rate().0)
+            .max_by_key(|r| rank(r))
+            .map(|r| r.clone().with_sample_rate(cpal::SampleRate(rate)))
+    };
+    if let Some(c) = pick(rate) {
+        return Some(c);
+    }
+    let mut rates: Vec<u32> = ranges
+        .iter()
+        .flat_map(|r| [r.min_sample_rate().0, r.max_sample_rate().0])
+        .collect();
+    rates.sort_unstable();
+    rates.dedup();
+    let below = rates.iter().rev().find(|&&r| r < rate).copied();
+    let above = rates.iter().find(|&&r| r > rate).copied();
+    below.or(above).and_then(pick)
+}
+
+/// Like [`open_output`], optionally at a given sample rate (macOS then switches the
+/// device to that rate).
+fn open_output_at(
+    shared: Arc<Shared>,
+    name: Option<&str>,
+    failed: Arc<AtomicBool>,
+    rate: Option<u32>,
+) -> Option<cpal::Stream> {
     let host = cpal::default_host();
     let device = match name {
         Some(n) => host
@@ -608,7 +703,10 @@ fn open_output(
             .find(|d| d.name().ok().as_deref() == Some(n))?,
         None => host.default_output_device()?,
     };
-    let config = device.default_output_config().ok()?;
+    let config = match rate {
+        Some(r) => config_for_rate(&device, r)?,
+        None => device.default_output_config().ok()?,
+    };
     let channels = config.channels() as usize;
     shared
         .out_rate

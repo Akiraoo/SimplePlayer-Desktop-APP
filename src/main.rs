@@ -938,8 +938,10 @@ impl App {
         self.cfg.exclusive = on;
         config::save(&self.cfg);
         let msg = match self.player.set_exclusive(on) {
-            Ok(d) if on => crate::tr!("WASAPI 獨佔：{}", "WASAPI exclusive: {}", d),
-            Ok(_) => crate::tr!("已改回共享模式（Windows 混音）", "Back to shared mode (Windows mixer)"),
+            Ok(d) if on && cfg!(windows) => crate::tr!("WASAPI 獨佔：{}", "WASAPI exclusive: {}", d),
+            Ok(d) if on => crate::tr!("原生取樣率輸出：{}", "Native sample rate output: {}", d),
+            Ok(_) if cfg!(windows) => crate::tr!("已改回共享模式（Windows 混音）", "Back to shared mode (Windows mixer)"),
+            Ok(_) => crate::tr!("已改回固定取樣率輸出", "Back to the device's own sample rate"),
             Err(e) => e,
         };
         self.flash(msg);
@@ -2834,6 +2836,12 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    // macOS wants the menu bar icon made once the event loop runs
+    #[cfg(target_os = "macos")]
+    slint::Timer::single_shot(Duration::from_millis(0), || {
+        with_app(|a| a.tray = tray::Tray::new());
+    });
+    #[cfg(not(target_os = "macos"))]
     with_app(|a| a.tray = tray::Tray::new());
     let tray_timer = slint::Timer::default();
     tray_timer.start(

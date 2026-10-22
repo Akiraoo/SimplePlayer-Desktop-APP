@@ -3,6 +3,11 @@
 //!
 //! A background thread keeps downloading a few chunks ahead of the read position, so the
 //! decoder never waits on the network (a 0.5–1 s request used to stall playback).
+//!
+//! Once that window is full it goes on and downloads the rest of the song (bigger requests,
+//! up to [`FULL_LIMIT`]). Seeking in a FLAC file without a seek table bisects the file with a
+//! dozen reads at different places; over the internet each one is a request, so a seek could
+//! stall for several seconds. With the whole song in memory a seek is instant.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -19,6 +24,10 @@ use symphonia::core::io::MediaSource;
 const CHUNK: u64 = 1024 * 1024;
 /// Chunks kept downloaded ahead of the read position (6 MB ≈ 15 s of 24/96 FLAC).
 const AHEAD: u64 = 6;
+/// Songs up to this size are downloaded completely in the background (kept in memory).
+const FULL_LIMIT: u64 = 200 * 1024 * 1024;
+/// Chunks per request when filling in the rest of the song.
+const BULK: u64 = 4;
 
 struct State {
     len: u64,
@@ -107,24 +116,42 @@ impl HttpSource {
     }
 }
 
-/// Fetches the first missing chunk from the reader's chunk onwards; idles when far enough ahead.
+/// Fetches the first missing chunk from the reader's chunk onwards; when the window ahead is
+/// full, fills in the rest of the song (if it isn't too big); otherwise idles.
 fn downloader(shared: Arc<Shared>, client: Client, url: String) {
     let last_chunk = |len: u64| len.saturating_sub(1) / CHUNK;
     loop {
-        let (want, len) = {
+        let (want, count, len) = {
             let mut st = shared.state.lock().unwrap();
             loop {
                 if st.stop {
                     return;
                 }
                 let first = st.reading;
-                let last = (first + AHEAD).min(last_chunk(st.len));
-                // drop what is far behind or far ahead (after a seek)
-                let keep_from = first.saturating_sub(1);
-                let keep_to = last + 2;
-                st.chunks.retain(|k, _| *k >= keep_from && *k <= keep_to);
+                let lastc = last_chunk(st.len);
+                let last = (first + AHEAD).min(lastc);
+                let full = st.len <= FULL_LIMIT;
+                if !full {
+                    // too big to keep: drop what is far behind or far ahead (after a seek)
+                    let keep_from = first.saturating_sub(1);
+                    let keep_to = last + 2;
+                    st.chunks.retain(|k, _| *k >= keep_from && *k <= keep_to);
+                }
                 if let Some(c) = (first..=last).find(|c| !st.chunks.contains_key(c)) {
-                    break (c, st.len);
+                    break (c, 1, st.len);
+                }
+                if full {
+                    // the rest of the song: from the reader onwards, then from the start
+                    let missing = (last + 1..=lastc)
+                        .chain(0..first)
+                        .find(|c| !st.chunks.contains_key(c));
+                    if let Some(c) = missing {
+                        let mut n = 1;
+                        while n < BULK && c + n <= lastc && !st.chunks.contains_key(&(c + n)) {
+                            n += 1;
+                        }
+                        break (c, n, st.len);
+                    }
                 }
                 st = shared
                     .cv
@@ -134,7 +161,7 @@ fn downloader(shared: Arc<Shared>, client: Client, url: String) {
             }
         };
         let start = want * CHUNK;
-        let end = ((want + 1) * CHUNK).min(len) - 1;
+        let end = ((want + count) * CHUNK).min(len) - 1;
         let mut result = Err(String::new());
         for attempt in 0..3 {
             match client
@@ -157,7 +184,9 @@ fn downloader(shared: Arc<Shared>, client: Client, url: String) {
         let mut st = shared.state.lock().unwrap();
         match result {
             Ok(bytes) => {
-                st.chunks.insert(want, Arc::new(bytes));
+                for (i, part) in bytes.chunks(CHUNK as usize).enumerate() {
+                    st.chunks.insert(want + i as u64, Arc::new(part.to_vec()));
+                }
             }
             Err(e) => st.error = Some(e),
         }

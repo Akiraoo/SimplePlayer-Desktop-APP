@@ -229,14 +229,46 @@ export component SearchBox inherits Rectangle {
             }
             return reject;
         }
-        input := TextInput {
+        ContextMenuArea {
             width: parent.width;
             height: parent.height;
-            color: Palette.text;
-            font-size: 12px;
-            single-line: true;
-            vertical-alignment: TextVerticalAlignment.center;
-            edited => { root.edited(self.text); }
+            Menu {
+                MenuItem {
+                    title: Lang.en ? "Cut" : "剪下";
+                    enabled: input.text != "";
+                    activated => { input.cut(); }
+                }
+                MenuItem {
+                    title: Lang.en ? "Copy" : "複製";
+                    enabled: input.text != "";
+                    activated => { input.copy(); }
+                }
+                MenuItem {
+                    title: Lang.en ? "Paste" : "貼上";
+                    activated => {
+                        input.focus();
+                        input.paste();
+                    }
+                }
+                MenuSeparator { }
+                MenuItem {
+                    title: Lang.en ? "Select All" : "全選";
+                    enabled: input.text != "";
+                    activated => {
+                        input.focus();
+                        input.select-all();
+                    }
+                }
+            }
+            input := TextInput {
+                width: parent.width;
+                height: parent.height;
+                color: Palette.text;
+                font-size: 12px;
+                single-line: true;
+                vertical-alignment: TextVerticalAlignment.center;
+                edited => { root.edited(self.text); }
+            }
         }
     }
     Text {
@@ -259,15 +291,48 @@ export component Field inherits Rectangle {
     background: Palette.bg;
     border-width: 1px;
     border-color: input.has-focus ? Palette.accent-line : Palette.line;
-    input := TextInput {
-        x: 12px;
-        width: parent.width - 24px;
+    // right-click menu (TextInput has none of its own)
+    ContextMenuArea {
+        width: parent.width;
         height: parent.height;
-        color: Palette.text;
-        font-size: 12px;
-        single-line: true;
-        vertical-alignment: TextVerticalAlignment.center;
-        accepted => { root.accepted(self.text); }
+        Menu {
+            MenuItem {
+                title: Lang.en ? "Cut" : "剪下";
+                enabled: input.text != "";
+                activated => { input.cut(); }
+            }
+            MenuItem {
+                title: Lang.en ? "Copy" : "複製";
+                enabled: input.text != "";
+                activated => { input.copy(); }
+            }
+            MenuItem {
+                title: Lang.en ? "Paste" : "貼上";
+                activated => {
+                    input.focus();
+                    input.paste();
+                }
+            }
+            MenuSeparator { }
+            MenuItem {
+                title: Lang.en ? "Select All" : "全選";
+                enabled: input.text != "";
+                activated => {
+                    input.focus();
+                    input.select-all();
+                }
+            }
+        }
+        input := TextInput {
+            x: 12px;
+            width: parent.width - 24px;
+            height: parent.height;
+            color: Palette.text;
+            font-size: 12px;
+            single-line: true;
+            vertical-alignment: TextVerticalAlignment.center;
+            accepted => { root.accepted(self.text); }
+        }
     }
     Text {
         x: 12px;
