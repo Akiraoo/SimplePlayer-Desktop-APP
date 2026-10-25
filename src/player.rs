@@ -101,6 +101,12 @@ struct Shared {
     /// The song being heard; `info_gen` changes whenever it does.
     info: Mutex<Option<StreamInfo>>,
     info_gen: AtomicU64,
+    /// Equalizer, run by the output on the samples it takes from the queue.
+    eq: Mutex<crate::eq::Processor>,
+    /// The queue was cleared (seek / new song): start the equalizer's filters clean.
+    eq_reset: AtomicBool,
+    /// The equalizer is changing the samples (so not bit-perfect).
+    eq_active: AtomicBool,
 }
 
 /// Commands for the audio-out thread (it owns the cpal stream).
@@ -148,7 +154,11 @@ impl Player {
             rg_active: AtomicBool::new(false),
             info: Mutex::new(None),
             info_gen: AtomicU64::new(0),
+            eq: Mutex::new(crate::eq::Processor::default()),
+            eq_reset: AtomicBool::new(false),
+            eq_active: AtomicBool::new(false),
         });
+        crate::eq::init();
 
         // The output stream lives on its own thread: WASAPI wants a COM apartment that
         // differs from the UI thread's, and cpal::Stream cannot move between threads.
@@ -321,6 +331,9 @@ impl Player {
             crate::tr!("共享 · {}", "Shared · {}", detail)
         };
         let mut s = desc + &buffered;
+        if sh.eq_active.load(Ordering::Relaxed) {
+            s.push_str(&crate::tr!(" · 等化器", " · EQ"));
+        }
         s.push_str(&crate::tr!(
             " · 斷音 {} 次",
             " · dropouts {}",
@@ -682,7 +695,8 @@ impl Output {
         let res = match self.excl.as_mut() {
             Some(x) => {
                 x.unity = f32::from_bits(shared.volume.load(Ordering::Relaxed)) >= 1.0
-                    && !shared.rg_active.load(Ordering::Relaxed);
+                    && !shared.rg_active.load(Ordering::Relaxed)
+                    && !shared.eq_active.load(Ordering::Relaxed);
                 let before = x.late;
                 let r = x.pump(|buf| fill(&shared, buf, 2, |v| v));
                 if x.late != before {
@@ -837,6 +851,19 @@ fn fill<T: Copy>(shared: &Shared, out: &mut [T], channels: usize, conv: impl Fn(
     }
     let vol = f32::from_bits(shared.volume.load(Ordering::Relaxed));
     let vol = vol * vol; // perceptual-ish curve
+    // only the output side uses the equalizer, so this lock is never contended
+    let mut eq = shared.eq.lock().ok();
+    let eq_on = match eq.as_mut() {
+        Some(e) => {
+            let on = e.prepare(shared.out_rate.load(Ordering::Relaxed));
+            if shared.eq_reset.swap(false, Ordering::Relaxed) {
+                e.reset();
+            }
+            on
+        }
+        None => false,
+    };
+    shared.eq_active.store(eq_on, Ordering::Relaxed);
     let mut q = match shared.queue.lock() {
         Ok(q) => q,
         Err(_) => return,
@@ -847,8 +874,19 @@ fn fill<T: Copy>(shared: &Shared, out: &mut [T], channels: usize, conv: impl Fn(
             frame.iter_mut().for_each(|s| *s = silence);
             continue;
         }
-        let l = q.pop_front().unwrap_or(0.0) * vol;
-        let r = q.pop_front().unwrap_or(0.0) * vol;
+        let mut l = q.pop_front().unwrap_or(0.0);
+        let mut r = q.pop_front().unwrap_or(0.0);
+        if eq_on {
+            if let Some(e) = eq.as_mut() {
+                (l, r) = e.frame(l, r);
+            }
+            // a boost can go past full scale: clip here rather than wrap in the conversion
+            l = (l * vol).clamp(-1.0, 1.0);
+            r = (r * vol).clamp(-1.0, 1.0);
+        } else {
+            l *= vol;
+            r *= vol;
+        }
         frames += 1;
         for (c, s) in frame.iter_mut().enumerate() {
             *s = match c {
@@ -1405,6 +1443,7 @@ fn clear(shared: &Shared, base_ms: u64) {
     if let Ok(mut q) = shared.queue.lock() {
         q.clear();
     }
+    shared.eq_reset.store(true, Ordering::Relaxed);
     shared.played.store(0, Ordering::Relaxed);
     shared.base_ms.store(base_ms, Ordering::Relaxed);
 }

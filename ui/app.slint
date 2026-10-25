@@ -18,6 +18,23 @@ export struct SourceItem {
     header: bool,
 }
 
+// one band of the equalizer as shown: slider positions 0..1 and the values as text
+export struct EqBandRow {
+    kind: int, // 0 low shelf, 1 peak, 2 high shelf
+    freq: float,
+    gain: float,
+    q: float,
+    freq-text: string,
+    gain-text: string,
+    q-text: string,
+}
+
+// a band's marker on the response curve (0..1 across / down)
+export struct EqDot {
+    x: float,
+    y: float,
+}
+
 export struct TrackRow {
     num: string,
     title: string,
@@ -120,6 +137,41 @@ export component MainWindow inherits Window {
     in-out property <int> replaygain-mode: 0;
     callback replaygain-picked(int);
     callback settings-opened();
+
+    // equalizer
+    in-out property <bool> show-eq: false;
+    in property <bool> eq-enabled: false;
+    in property <[string]> eq-presets;
+    in property <int> eq-current: 0;
+    in property <float> eq-preamp: 0.77;
+    in property <string> eq-preamp-text: "0.0 dB";
+    in property <[EqBandRow]> eq-bands;
+    in property <string> eq-curve: "M 0 150 L 1000 150";
+    in property <[EqDot]> eq-dots;
+    in property <string> eq-message;
+    in property <int> eq-max-bands: 10;
+    // -1 none, 0 naming a new preset, 1 renaming, 2 confirming a delete
+    in-out property <int> eq-dialog: -1;
+    in-out property <string> eq-name;
+    callback eq-opened();
+    callback eq-toggled(bool);
+    callback eq-select(int);
+    callback eq-name-done(int, string);
+    callback eq-delete();
+    callback eq-import();
+    callback eq-export();
+    callback eq-preamp-moving(float);
+    callback eq-preamp-committed(float);
+    callback eq-auto-preamp();
+    callback eq-band-kind(int, int);
+    // band, what (0 frequency, 1 gain, 2 Q), slider position 0..1
+    callback eq-band-moving(int, int, float);
+    callback eq-band-committed(int, int, float);
+    callback eq-band-delete(int);
+    callback eq-band-add();
+    changed show-eq => {
+        if (root.show-eq) { root.eq-opened(); }
+    }
     changed show-settings => {
         if (root.show-settings) { root.settings-opened(); }
     }
@@ -212,6 +264,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 VerticalLayout { alignment: center; Glyph { size: 30px; icon-size: 18px; icon: "refresh"; clicked => { root.rescan(); } } }
+                VerticalLayout { alignment: center; Glyph { size: 30px; icon-size: 18px; icon: "eq"; active: root.show-eq || root.eq-enabled; clicked => { root.show-eq = true; } } }
                 VerticalLayout { alignment: center; Glyph { size: 30px; icon-size: 18px; icon: "settings"; active: root.show-settings; clicked => { root.show-settings = true; } } }
                 VerticalLayout { alignment: center; Glyph { size: 30px; icon-size: 18px; icon: "info"; badge: root.update-available ? "!" : ""; active: root.show-about; clicked => { root.show-about = true; } } }
                 Rectangle { width: 6px; }
@@ -682,6 +735,7 @@ export component MainWindow inherits Window {
             if (e.text == Key.Escape) {
                 root.show-settings = false;
                 root.show-about = false;
+                root.show-eq = false;
                 return accept;
             }
             return reject;
@@ -1247,6 +1301,352 @@ export component MainWindow inherits Window {
                         content-h: settings-scroll.content-height;
                         view-h: settings-scroll.height;
                         content-y <=> settings-scroll.content-y;
+                    }
+                }
+            }
+        }
+    }
+
+    /* ---------- equalizer ---------- */
+    if root.show-eq: Rectangle {
+        background: Palette.scrim;
+        TouchArea { clicked => { root.show-eq = false; keys.focus(); } }
+        Rectangle {
+            width: min(parent.width - 40px, 640px);
+            height: min(parent.height - 40px, 780px);
+            border-radius: 18px;
+            background: Palette.surface;
+            border-width: 1px;
+            border-color: Palette.line;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000070;
+            TouchArea {}
+            VerticalLayout {
+                padding: 24px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: (Lang.en ? "Equalizer" : "等化器"); font-size: 20px; font-weight: 700; color: Palette.strong; vertical-alignment: TextVerticalAlignment.center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.eq-enabled ? (Lang.en ? "On" : "開") : (Lang.en ? "Off" : "關");
+                        color: Palette.muted;
+                        font-size: 12px;
+                        vertical-alignment: TextVerticalAlignment.center;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle {
+                            checked: root.eq-enabled;
+                            toggled(on) => { root.eq-toggled(on); }
+                        }
+                    }
+                    Rectangle { width: 4px; }
+                    VerticalLayout { alignment: center; Glyph { icon: "close"; clicked => { root.show-eq = false; keys.focus(); } } }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    eq-scroll := Flickable {
+                        content-height: eq-col.preferred-height;
+                        eq-col := VerticalLayout {
+                            width: eq-scroll.width - 12px;
+                            spacing: 10px;
+
+                            // presets
+                            Rectangle {
+                                border-radius: 12px;
+                                background: Palette.raised;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 10px;
+                                    Text { text: Lang.en ? "Presets" : "設定檔"; color: Palette.strong; font-weight: 600; }
+                                    chips := Flickable {
+                                        height: 32px;
+                                        content-width: max(chip-row.preferred-width, self.width);
+                                        chip-row := HorizontalLayout {
+                                            alignment: start;
+                                            spacing: 6px;
+                                            for name[i] in root.eq-presets: Rectangle {
+                                                property <bool> on: i == root.eq-current;
+                                                height: 30px;
+                                                width: chip-text.preferred-width + 28px;
+                                                border-radius: 15px;
+                                                background: self.on ? Palette.accent : (chip-ta.has-hover ? Palette.hover : Palette.bg);
+                                                border-width: self.on ? 0px : 1px;
+                                                border-color: Palette.line;
+                                                chip-text := Text {
+                                                    text: name;
+                                                    color: parent.on ? Palette.accent-text : Palette.text;
+                                                    font-size: 12px;
+                                                    font-weight: parent.on ? 600 : 400;
+                                                    horizontal-alignment: TextHorizontalAlignment.center;
+                                                    vertical-alignment: TextVerticalAlignment.center;
+                                                }
+                                                chip-ta := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.eq-select(i); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if root.eq-dialog == 0 || root.eq-dialog == 1: HorizontalLayout {
+                                        spacing: 8px;
+                                        Field {
+                                            horizontal-stretch: 1;
+                                            text <=> root.eq-name;
+                                            placeholder: root.eq-dialog == 0 ? (Lang.en ? "Name of the new preset" : "新設定檔的名稱") : (Lang.en ? "New name" : "新的名稱");
+                                            accepted(t) => { root.eq-name-done(root.eq-dialog, t); }
+                                        }
+                                        VerticalLayout { alignment: center; Pill { label: Lang.en ? "OK" : "確定"; primary: true; clicked => { root.eq-name-done(root.eq-dialog, root.eq-name); } } }
+                                        VerticalLayout { alignment: center; Pill { label: Lang.en ? "Cancel" : "取消"; clicked => { root.eq-dialog = -1; } } }
+                                    }
+                                    if root.eq-dialog == 2: HorizontalLayout {
+                                        spacing: 8px;
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: (Lang.en ? "Delete \"" : "刪除「") + root.eq-presets[root.eq-current] + (Lang.en ? "\"?" : "」？");
+                                            color: Palette.strong;
+                                            vertical-alignment: TextVerticalAlignment.center;
+                                            overflow: TextOverflow.elide;
+                                        }
+                                        VerticalLayout { alignment: center; Pill { label: Lang.en ? "Delete" : "刪除"; primary: true; clicked => { root.eq-delete(); } } }
+                                        VerticalLayout { alignment: center; Pill { label: Lang.en ? "Cancel" : "取消"; clicked => { root.eq-dialog = -1; } } }
+                                    }
+                                    if root.eq-dialog < 0: HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        Pill { label: Lang.en ? "New" : "新增"; icon: "plus"; clicked => { root.eq-name = ""; root.eq-dialog = 0; } }
+                                        Pill { label: Lang.en ? "Rename" : "重新命名"; clicked => { root.eq-name = root.eq-presets[root.eq-current]; root.eq-dialog = 1; } }
+                                        Pill { label: Lang.en ? "Delete" : "刪除"; icon: "trash"; clicked => { root.eq-dialog = 2; } }
+                                        Pill { label: Lang.en ? "Import" : "匯入"; icon: "folder"; clicked => { root.eq-import(); } }
+                                        Pill { label: Lang.en ? "Export" : "匯出"; clicked => { root.eq-export(); } }
+                                    }
+                                    if root.eq-message != "": Text {
+                                        text: root.eq-message;
+                                        color: Palette.accent;
+                                        font-size: 11px;
+                                        wrap: TextWrap.word-wrap;
+                                    }
+                                    Text {
+                                        text: Lang.en
+                                            ? "Poweramp presets (.json) and AutoEq / Equalizer APO ParametricEQ.txt files can be imported; export writes Poweramp's format, which the Android app reads too."
+                                            : "可以匯入 Poweramp 的設定檔（.json）和 AutoEq／Equalizer APO 的 ParametricEQ.txt；匯出是 Poweramp 格式，Android 版也能直接匯入。";
+                                        color: Palette.muted;
+                                        font-size: 10px;
+                                        wrap: TextWrap.word-wrap;
+                                    }
+                                    if !root.eq-enabled: Text {
+                                        text: Lang.en ? "The equalizer is off: turn on the switch at the top to hear it." : "等化器目前關閉，打開右上角的開關才會套用。";
+                                        color: Palette.muted;
+                                        font-size: 11px;
+                                        wrap: TextWrap.word-wrap;
+                                    }
+                                }
+                            }
+
+                            // response curve
+                            Rectangle {
+                                border-radius: 12px;
+                                background: Palette.raised;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 4px;
+                                    curve := Rectangle {
+                                        height: 170px;
+                                        // ±6 / ±12 dB lines (±15 dB fills the height)
+                                        for db in [-12, -6, 6, 12]: Rectangle {
+                                            y: parent.height * (0.5 - db / 30) - 0.5px;
+                                            height: 1px;
+                                            background: Palette.line;
+                                        }
+                                        Rectangle {
+                                            y: parent.height / 2 - 0.75px;
+                                            height: 1.5px;
+                                            background: Palette.faint;
+                                        }
+                                        // 50 100 200 500 1k 2k 5k 10k Hz
+                                        for pos in [0.1323, 0.2330, 0.3333, 0.4660, 0.5667, 0.6667, 0.7993, 0.9000]: Rectangle {
+                                            x: parent.width * pos;
+                                            width: 1px;
+                                            background: Palette.line;
+                                        }
+                                        Path {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            viewbox-width: 1000;
+                                            viewbox-height: 300;
+                                            commands: root.eq-curve;
+                                            stroke: root.eq-enabled ? Palette.accent : Palette.muted;
+                                            stroke-width: 2px;
+                                            fill: transparent;
+                                        }
+                                        for d in root.eq-dots: Rectangle {
+                                            x: parent.width * d.x - 4px;
+                                            y: parent.height * d.y - 4px;
+                                            width: 8px;
+                                            height: 8px;
+                                            border-radius: 4px;
+                                            background: root.eq-enabled ? Palette.accent : Palette.muted;
+                                        }
+                                    }
+                                    Rectangle {
+                                        height: 14px;
+                                        for label[i] in ["20", "100", "1k", "10k", "20k"]: Text {
+                                            property <float> pos: [0, 0.2330, 0.5667, 0.9, 1][i];
+                                            width: 30px;
+                                            x: clamp(parent.width * self.pos - 15px, 0px, parent.width - 30px);
+                                            horizontal-alignment: i == 0 ? TextHorizontalAlignment.left : (i == 4 ? TextHorizontalAlignment.right : TextHorizontalAlignment.center);
+                                            text: label;
+                                            color: Palette.muted;
+                                            font-size: 10px;
+                                        }
+                                    }
+                                    Text {
+                                        text: Lang.en ? "±15 dB, preamp included" : "±15 dB，含前級";
+                                        color: Palette.faint;
+                                        font-size: 10px;
+                                    }
+                                }
+                            }
+
+                            // preamp
+                            Rectangle {
+                                border-radius: 12px;
+                                background: Palette.raised;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    spacing: 6px;
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        Text { text: Lang.en ? "Preamp" : "前級"; color: Palette.strong; font-weight: 600; vertical-alignment: TextVerticalAlignment.center; }
+                                        Slider {
+                                            horizontal-stretch: 1;
+                                            value: root.eq-preamp;
+                                            moving(v) => { root.eq-preamp-moving(v); }
+                                            committed(v) => { root.eq-preamp-committed(v); }
+                                        }
+                                        Text {
+                                            width: 64px;
+                                            text: root.eq-preamp-text;
+                                            color: Palette.text;
+                                            font-size: 12px;
+                                            horizontal-alignment: TextHorizontalAlignment.right;
+                                            vertical-alignment: TextVerticalAlignment.center;
+                                        }
+                                        VerticalLayout { alignment: center; Pill { label: Lang.en ? "Auto" : "自動"; clicked => { root.eq-auto-preamp(); } } }
+                                    }
+                                    Text {
+                                        text: Lang.en
+                                            ? "When a band boosts, lower the preamp by about as much so it doesn't clip. \"Auto\" works it out."
+                                            : "有頻段加了增益時，前級要往下調差不多一樣多，才不會破音。按「自動」會幫你算。";
+                                        color: Palette.muted;
+                                        font-size: 10px;
+                                        wrap: TextWrap.word-wrap;
+                                    }
+                                }
+                            }
+
+                            // bands
+                            for band[i] in root.eq-bands: Rectangle {
+                                border-radius: 12px;
+                                background: Palette.raised;
+                                VerticalLayout {
+                                    padding: 14px;
+                                    padding-top: 10px;
+                                    spacing: 6px;
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        Text {
+                                            text: (Lang.en ? "Band " : "頻段 ") + (i + 1);
+                                            color: Palette.strong;
+                                            font-weight: 600;
+                                            vertical-alignment: TextVerticalAlignment.center;
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 246px;
+                                                height: 28px;
+                                                border-radius: 14px;
+                                                background: Palette.bg;
+                                                border-width: 1px;
+                                                border-color: Palette.line;
+                                                HorizontalLayout {
+                                                    padding: 3px;
+                                                    spacing: 2px;
+                                                    for opt[k] in (Lang.en ? ["Low shelf", "Peak", "High shelf"] : ["低頻擱架", "峰值", "高頻擱架"]): Rectangle {
+                                                        property <bool> on: k == band.kind;
+                                                        border-radius: 11px;
+                                                        background: self.on ? Palette.accent : (kta.has-hover ? Palette.hover : transparent);
+                                                        Text {
+                                                            text: opt;
+                                                            color: parent.on ? Palette.accent-text : Palette.text;
+                                                            font-size: 11px;
+                                                            font-weight: parent.on ? 600 : 400;
+                                                            horizontal-alignment: TextHorizontalAlignment.center;
+                                                            vertical-alignment: TextVerticalAlignment.center;
+                                                        }
+                                                        kta := TouchArea {
+                                                            mouse-cursor: pointer;
+                                                            clicked => { if (!parent.on) { root.eq-band-kind(i, k); } }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        VerticalLayout { alignment: center; Glyph { size: 28px; icon-size: 16px; icon: "trash"; clicked => { root.eq-band-delete(i); } } }
+                                    }
+                                    for row[w] in [
+                                        { label: Lang.en ? "Frequency" : "頻率", value: band.freq, text: band.freq-text },
+                                        { label: Lang.en ? "Gain" : "增益", value: band.gain, text: band.gain-text },
+                                        { label: "Q", value: band.q, text: band.q-text }
+                                    ]: HorizontalLayout {
+                                        spacing: 10px;
+                                        Text {
+                                            width: 64px;
+                                            text: row.label;
+                                            color: Palette.text;
+                                            font-size: 12px;
+                                            vertical-alignment: TextVerticalAlignment.center;
+                                        }
+                                        Slider {
+                                            horizontal-stretch: 1;
+                                            value: row.value;
+                                            moving(v) => { root.eq-band-moving(i, w, v); }
+                                            committed(v) => { root.eq-band-committed(i, w, v); }
+                                        }
+                                        Text {
+                                            width: 72px;
+                                            text: row.text;
+                                            color: Palette.text;
+                                            font-size: 12px;
+                                            horizontal-alignment: TextHorizontalAlignment.right;
+                                            vertical-alignment: TextVerticalAlignment.center;
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                Pill {
+                                    label: root.eq-bands.length < root.eq-max-bands
+                                        ? (Lang.en ? "Add band" : "新增頻段")
+                                        : (Lang.en ? "At most " + root.eq-max-bands + " bands" : "最多 " + root.eq-max-bands + " 段");
+                                    icon: "plus";
+                                    clicked => { if (root.eq-bands.length < root.eq-max-bands) { root.eq-band-add(); } }
+                                }
+                            }
+                            Rectangle { height: 6px; }
+                        }
+                    }
+                    ScrollThumb {
+                        x: parent.width - self.width;
+                        height: parent.height;
+                        content-h: eq-scroll.content-height;
+                        view-h: eq-scroll.height;
+                        content-y <=> eq-scroll.content-y;
                     }
                 }
             }

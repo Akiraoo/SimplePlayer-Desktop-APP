@@ -2,7 +2,7 @@
 
 Simple Player 的桌面客戶端（Windows、macOS）：本地音樂和 [Simple Player Web Server](https://github.com/Akiraoo/SimplePlayer-Web-Server) 的曲庫放在同一個播放器裡，內建 Discord 狀態顯示。用 Rust + [Slint](https://slint.dev) 寫成，不使用瀏覽器核心，記憶體占用低。
 
-> 目前版本：v2.0.0。介面支援繁體中文與 English。macOS 版目前是測試版，見下方「macOS」。
+> 目前版本：v2.1.0。介面支援繁體中文與 English。macOS 版目前是測試版，見下方「macOS」。
 
 ## 功能
 

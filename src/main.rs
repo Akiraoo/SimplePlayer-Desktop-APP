@@ -4,6 +4,8 @@
 mod i18n;
 mod config;
 mod discord;
+mod eq;
+mod eqpanel;
 mod ffdec;
 mod httpsrc;
 mod library;
@@ -144,6 +146,10 @@ struct App {
     status: String,
     lyrics: Vec<(Option<f64>, String)>,
     active_lyric: i32,
+    /// Equalizer presets (eq.json), the preset being edited, the band cards' model.
+    eq: eq::Store,
+    eq_edit: eq::Preset,
+    eq_model: Option<std::rc::Rc<VecModel<EqBandRow>>>,
 }
 
 thread_local! {
@@ -2355,6 +2361,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_auto_update(cfg.auto_update);
     ui.set_is_windows(cfg!(windows));
     ui.set_replaygain_mode(cfg.replaygain as i32);
+    let eq_store = eq::Store::load();
+    let eq_edit = eq_store.current().clone();
+    ui.set_eq_enabled(eq_store.enabled);
 
     let player = Player::new(
         |ev| post(move |app| app.on_player_event(ev)),
@@ -2418,6 +2427,9 @@ fn main() -> Result<(), slint::PlatformError> {
         queue_pos: 0,
         current: None,
         cover_file: None,
+        eq: eq_store,
+        eq_edit,
+        eq_model: None,
         player,
         discord,
         media: None,
@@ -2455,6 +2467,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     /* ---------- callbacks ---------- */
+    eqpanel::wire(&ui);
     ui.on_source_clicked(|i| {
         with_app(|a| a.select_source(i.max(0) as usize));
     });
