@@ -121,6 +121,34 @@ jobs:
             screenshot.png
           if-no-files-found: ignore
 
+      # The audio output measured on a real Apple Silicon machine: exclusive mode at several
+      # sample rates, idle and with every core busy, into the virtual BlackHole device (the
+      # runners have no sound hardware). Results: the run's summary and "macOS-audio-selftest".
+      - name: Audio selftest
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          brew install --cask blackhole-2ch
+          sudo killall coreaudiod || true
+          sleep 5
+          set -o pipefail
+          "dist/Simple Player.app/Contents/MacOS/SimplePlayer" --audio-selftest "BlackHole 2ch" 2>&1 | tee selftest.log
+        shell: bash
+
+      - name: Audio selftest summary
+        if: always()
+        run: |
+          if [ -f selftest.log ]; then
+            { echo "### macOS audio selftest"; echo; grep '^|' selftest.log || echo "(no results)"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: macOS-audio-selftest
+          path: selftest.log
+          if-no-files-found: ignore
+
       - name: Attach to a draft release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3

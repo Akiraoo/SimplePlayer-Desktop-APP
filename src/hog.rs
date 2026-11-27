@@ -155,6 +155,19 @@ pub fn find(name: Option<&str>) -> Option<u32> {
     }
 }
 
+const NOMINAL_RATE: u32 = fourcc(b"nsrt");
+const BUFFER_FRAMES: u32 = fourcc(b"fsiz");
+
+/// The rate the device itself runs at (what it was switched to, not what a stream asked for).
+pub fn nominal_rate(id: u32) -> Option<f64> {
+    get(id, NOMINAL_RATE, SCOPE_GLOBAL, 0f64)
+}
+
+/// The device's I/O buffer, in frames (= samples handed over per callback).
+pub fn buffer_frames(id: u32) -> Option<u32> {
+    get(id, BUFFER_FRAMES, SCOPE_GLOBAL, 0u32)
+}
+
 fn owner(id: ObjectId) -> Option<i32> {
     get(id, HOG_MODE, SCOPE_GLOBAL, -1i32)
 }

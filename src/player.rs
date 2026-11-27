@@ -107,6 +107,33 @@ struct Shared {
     eq_reset: AtomicBool,
     /// The equalizer is changing the samples (so not bit-perfect).
     eq_active: AtomicBool,
+    /// Diagnostics (`--audio-selftest`): output callbacks, the longest one, the longest wait
+    /// between two, the frames asked for by the last one (ns since `clock_origin`).
+    cb_count: AtomicU64,
+    cb_max_ns: AtomicU64,
+    cb_gap_max_ns: AtomicU64,
+    cb_last_ns: AtomicU64,
+    cb_frames: AtomicU64,
+}
+
+/// A fixed point in time for the callback timings (Instant can't live in an atomic).
+fn clock_ns() -> u64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64
+}
+
+/// What `--audio-selftest` reads after each test.
+#[derive(Clone, Debug, Default)]
+pub struct Stats {
+    pub played: u64,
+    pub underruns: u64,
+    pub late: u64,
+    pub out_rate: u32,
+    pub callbacks: u64,
+    pub cb_max_ms: f64,
+    pub cb_gap_max_ms: f64,
+    pub cb_frames: u64,
+    pub desc: String,
 }
 
 /// Commands for the audio-out thread (it owns the cpal stream).
@@ -157,6 +184,11 @@ impl Player {
             eq: Mutex::new(crate::eq::Processor::default()),
             eq_reset: AtomicBool::new(false),
             eq_active: AtomicBool::new(false),
+            cb_count: AtomicU64::new(0),
+            cb_max_ns: AtomicU64::new(0),
+            cb_gap_max_ns: AtomicU64::new(0),
+            cb_last_ns: AtomicU64::new(0),
+            cb_frames: AtomicU64::new(0),
         });
         crate::eq::init();
 
@@ -358,6 +390,27 @@ impl Player {
     /// Track length in seconds (0 when unknown).
     pub fn duration(&self) -> f64 {
         self.shared.duration_ms.load(Ordering::Relaxed) as f64 / 1000.0
+    }
+
+    /// Output counters for `--audio-selftest`; `reset` starts them again from zero.
+    pub fn stats(&self, reset: bool) -> Stats {
+        let sh = &self.shared;
+        let take = |a: &AtomicU64| if reset { a.swap(0, Ordering::Relaxed) } else { a.load(Ordering::Relaxed) };
+        let s = Stats {
+            played: sh.played.load(Ordering::Relaxed),
+            underruns: take(&sh.underruns),
+            late: take(&sh.late),
+            out_rate: sh.out_rate.load(Ordering::Relaxed),
+            callbacks: take(&sh.cb_count),
+            cb_max_ms: take(&sh.cb_max_ns) as f64 / 1e6,
+            cb_gap_max_ms: take(&sh.cb_gap_max_ns) as f64 / 1e6,
+            cb_frames: sh.cb_frames.load(Ordering::Relaxed),
+            desc: sh.desc.lock().map(|d| d.clone()).unwrap_or_default(),
+        };
+        if reset {
+            sh.cb_last_ns.store(0, Ordering::Relaxed);
+        }
+        s
     }
 }
 
@@ -843,7 +896,22 @@ fn open_output_at(
     Some(stream)
 }
 
+/// One output callback: [`fill_frames`], timed for the diagnostics.
 fn fill<T: Copy>(shared: &Shared, out: &mut [T], channels: usize, conv: impl Fn(f32) -> T) {
+    let start = clock_ns();
+    let last = shared.cb_last_ns.swap(start, Ordering::Relaxed);
+    if last != 0 {
+        shared.cb_gap_max_ns.fetch_max(start - last, Ordering::Relaxed);
+    }
+    fill_frames(shared, out, channels, conv);
+    shared.cb_max_ns.fetch_max(clock_ns() - start, Ordering::Relaxed);
+    shared.cb_count.fetch_add(1, Ordering::Relaxed);
+    shared
+        .cb_frames
+        .store((out.len() / channels.max(1)) as u64, Ordering::Relaxed);
+}
+
+fn fill_frames<T: Copy>(shared: &Shared, out: &mut [T], channels: usize, conv: impl Fn(f32) -> T) {
     let silence = conv(0.0);
     if shared.paused.load(Ordering::Relaxed) {
         out.iter_mut().for_each(|s| *s = silence);

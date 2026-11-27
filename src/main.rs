@@ -13,6 +13,7 @@ mod media;
 mod mini;
 mod player;
 mod resample;
+mod selftest;
 mod server;
 mod session;
 mod single;
@@ -2334,6 +2335,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // ones would take over muda's single, process-wide menu event handler, and the tray /
     // menu bar icon's menu (also muda) would then stop receiving clicks.
     std::env::set_var("SLINT_NO_MUDA", "1");
+    // "--audio-selftest [device]": measure the audio output without the UI (CI, diagnostics)
+    let mut raw = std::env::args().skip(1);
+    if raw.next().as_deref() == Some("--audio-selftest") {
+        std::process::exit(selftest::run(raw.next()));
+    }
     // "--mini <files>" (double-clicked files) or files given directly: the mini player.
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let mini_mode = args.first().is_some_and(|a| a.as_os_str() == "--mini");
