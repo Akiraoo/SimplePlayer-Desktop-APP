@@ -2,7 +2,6 @@
 //! worker thread into a buffer that the output (cpal shared mode, or WASAPI exclusive)
 //! drains. The next song can be handed over early, so it follows without a gap.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -71,7 +70,8 @@ enum Cmd {
 }
 
 struct Shared {
-    queue: Mutex<VecDeque<f32>>, // interleaved stereo at the output rate
+    /// Interleaved stereo at the output rate; the output reads it without a lock.
+    queue: crate::ring::Ring,
     paused: AtomicBool,
     volume: AtomicU32,  // f32 bits
     played: AtomicU64,  // output frames played since the last load/seek
@@ -160,7 +160,7 @@ impl Player {
         exclusive: bool,
     ) -> Player {
         let shared = Arc::new(Shared {
-            queue: Mutex::new(VecDeque::new()),
+            queue: crate::ring::Ring::default(),
             paused: AtomicBool::new(true),
             volume: AtomicU32::new(0.8f32.to_bits()),
             played: AtomicU64::new(0),
@@ -344,15 +344,8 @@ impl Player {
     pub fn output_status(&self) -> String {
         let sh = &self.shared;
         let rate = sh.out_rate.load(Ordering::Relaxed).max(1) as f64;
-        // try_lock: if the audio side holds the queue right now, just skip that number
-        let buffered = sh
-            .queue
-            .try_lock()
-            .map(|q| {
-                let secs = format!("{:.2}", q.len() as f64 / 2.0 / rate);
-                crate::tr!(" · 緩衝 {} 秒", " · buffer {} s", secs)
-            })
-            .unwrap_or_default();
+        let secs = format!("{:.2}", sh.queue.len() as f64 / 2.0 / rate);
+        let buffered = crate::tr!(" · 緩衝 {} 秒", " · buffer {} s", secs);
         let detail = sh.desc.lock().map(|d| d.clone()).unwrap_or_default();
         let excl = sh.exclusive.load(Ordering::Relaxed);
         let desc = if detail.is_empty() {
@@ -439,6 +432,9 @@ struct Output {
     /// macOS exclusive mode: the device held for us alone (kept across songs).
     #[cfg(target_os = "macos")]
     hog: Option<crate::hog::Hog>,
+    /// macOS exclusive mode: the device switched to the songs' rates (restored when dropped).
+    #[cfg(target_os = "macos")]
+    native: Option<crate::hog::Native>,
     /// Song rate the exclusive stream was opened for (the device may have picked another).
     #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     excl_for: u32,
@@ -503,6 +499,8 @@ impl Output {
             excl: None,
             #[cfg(target_os = "macos")]
             hog: None,
+            #[cfg(target_os = "macos")]
+            native: None,
             excl_for: 0,
         };
         let ok = o.open().is_ok();
@@ -518,7 +516,7 @@ impl Output {
                 let under = o.shared.underruns.load(Ordering::Relaxed);
                 let secs = stat_at.elapsed().as_secs_f64();
                 if !o.shared.paused.load(Ordering::Relaxed) && played >= stat_played {
-                    let queued = o.shared.queue.lock().map(|q| q.len() / 2).unwrap_or(0);
+                    let queued = o.shared.queue.len() / 2;
                     eprintln!(
                         "output: {:.0} frames/s taken (opened at {} Hz), {} underruns, {} frames queued",
                         (played - stat_played) as f64 / secs,
@@ -629,6 +627,23 @@ impl Output {
                         }
                     }
                 }
+                // The device itself must run at the song's rate: cpal only sets the stream's
+                // format, and macOS then converts every buffer on the audio thread.
+                if self.native.as_ref().map(|n| n.device()) != Some(id) {
+                    self.native = None;
+                    self.native = Some(crate::hog::Native::new(id));
+                }
+                if !crate::hog::set_rate(id, rate as f64) {
+                    eprintln!("output: the device can't run at {rate} Hz");
+                }
+                // ~21 ms per callback at every rate: the usual 512 frames leave only 2.7 ms
+                // per callback at 192 kHz
+                let frames = crate::hog::set_buffer_frames(id, (rate / 48).next_power_of_two());
+                eprintln!(
+                    "output: device at {:?} Hz, I/O buffer {:?} frames",
+                    crate::hog::nominal_rate(id),
+                    frames
+                );
             }
             let opened = self
                 .want
@@ -639,7 +654,10 @@ impl Output {
                 .or_else(|| open_output_at(self.shared.clone(), None, self.failed.clone(), Some(rate)));
             match opened {
                 Some(stream) => {
-                    let got = self.shared.out_rate.load(Ordering::Relaxed);
+                    // what the device runs at (the stream alone could be converted to it)
+                    let got = dev
+                        .and_then(crate::hog::nominal_rate)
+                        .map_or(self.shared.out_rate.load(Ordering::Relaxed), |r| r as u32);
                     let d = if let Some(e) = &hog_err {
                         crate::tr!("{} kHz（未獨佔：{}）", "{} kHz (not exclusive: {})", got as f64 / 1000.0, e)
                     } else if got == rate {
@@ -667,9 +685,10 @@ impl Output {
                 }
             }
         }
-        // shared mode: give the device back to everyone
+        // shared mode: give the device back to everyone, at its own rate
         #[cfg(target_os = "macos")]
         {
+            self.native = None;
             self.hog = None;
         }
         self.shared.exclusive.store(false, Ordering::Relaxed);
@@ -932,18 +951,26 @@ fn fill_frames<T: Copy>(shared: &Shared, out: &mut [T], channels: usize, conv: i
         None => false,
     };
     shared.eq_active.store(eq_on, Ordering::Relaxed);
-    let mut q = match shared.queue.lock() {
-        Ok(q) => q,
-        Err(_) => return,
-    };
+    // taken in pieces through a buffer on the stack: no lock, no allocation here
+    let mut tmp = [0f32; 1024];
+    let (mut got, mut pos) = (0usize, 0usize);
+    let mut empty = false;
     let mut frames = 0u64;
-    for frame in out.chunks_mut(channels) {
-        if q.len() < 2 {
+    let total = out.len() / channels.max(1);
+    for (i, frame) in out.chunks_mut(channels).enumerate() {
+        if pos == got && !empty {
+            // next piece (an empty buffer stays empty for the rest of this callback)
+            let want = (total - i).min(tmp.len() / 2);
+            got = shared.queue.pop(&mut tmp[..want * 2]) / 2;
+            pos = 0;
+            empty = got == 0;
+        }
+        if empty {
             frame.iter_mut().for_each(|s| *s = silence);
             continue;
         }
-        let mut l = q.pop_front().unwrap_or(0.0);
-        let mut r = q.pop_front().unwrap_or(0.0);
+        let (mut l, mut r) = (tmp[pos * 2], tmp[pos * 2 + 1]);
+        pos += 1;
         if eq_on {
             if let Some(e) = eq.as_mut() {
                 (l, r) = e.frame(l, r);
@@ -1304,7 +1331,7 @@ fn decoder_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, on_event: impl Fn(Play
                 start_handover(&shared, &mut st);
                 continue;
             }
-            let empty = shared.queue.lock().map(|q| q.len() < 2).unwrap_or(true);
+            let empty = shared.queue.len() < 2;
             if empty && !st.ended_sent {
                 st.ended_sent = true;
                 on_event(PlayerEvent::Ended);
@@ -1323,16 +1350,16 @@ fn decoder_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, on_event: impl Fn(Play
         let out_rate = shared.out_rate.load(Ordering::Relaxed);
         let level = (shared.buffer_level.load(Ordering::Relaxed) as usize).min(2);
         let limit = (out_rate as f32 * BUFFER_LEVELS[level].0) as usize * 2;
-        if shared.queue.lock().map(|q| q.len()).unwrap_or(0) >= limit {
+        // what did not fit into the buffer last time goes first
+        shared.queue.flush();
+        if shared.queue.len() >= limit {
             thread::sleep(Duration::from_millis(10));
             continue;
         }
 
         let Some(mut block) = t.next_block() else {
             let tail = t.resampler.flush();
-            if let Ok(mut q) = shared.queue.lock() {
-                q.extend(tail);
-            }
+            shared.queue.push(&tail);
             shared.decoding_done.store(true, Ordering::Relaxed);
             continue;
         };
@@ -1346,9 +1373,7 @@ fn decoder_thread(rx: Receiver<Cmd>, shared: Arc<Shared>, on_event: impl Fn(Play
         // the output device may have changed (other sample rate)
         t.set_out_rate(out_rate);
         let out = t.resampler.process(&block);
-        if let Ok(mut q) = shared.queue.lock() {
-            q.extend(out);
-        }
+        shared.queue.push(&out);
     }
 }
 
@@ -1369,7 +1394,7 @@ fn start_handover(shared: &Shared, st: &mut State) {
             }
         },
     };
-    let queued = shared.queue.lock().map(|q| q.len() / 2).unwrap_or(0) as u64;
+    let queued = (shared.queue.len() / 2) as u64;
     let at = shared.played.load(Ordering::Relaxed) + queued;
     let reopen = shared.exclusive.load(Ordering::Relaxed)
         && nt.src_rate != shared.want_rate.load(Ordering::Relaxed);
@@ -1508,9 +1533,7 @@ fn handle(shared: &Arc<Shared>, cmd: Cmd, st: &mut State, on_event: &impl Fn(Pla
 }
 
 fn clear(shared: &Shared, base_ms: u64) {
-    if let Ok(mut q) = shared.queue.lock() {
-        q.clear();
-    }
+    shared.queue.clear();
     shared.eq_reset.store(true, Ordering::Relaxed);
     shared.played.store(0, Ordering::Relaxed);
     shared.base_ms.store(base_ms, Ordering::Relaxed);

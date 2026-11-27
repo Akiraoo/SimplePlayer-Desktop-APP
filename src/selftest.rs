@@ -3,8 +3,8 @@
 //! idle and with every CPU core busy, and prints what the output really did. Made for the
 //! macOS CI machines (a virtual BlackHole device), where nobody can listen.
 //!
-//! Exit code 1 when a test failed: dropouts, the device taking samples at the wrong speed,
-//! or (macOS) the device not running at the song's own rate.
+//! Exit code 1 when a test failed: dropouts, or (macOS) the device not running at the song's
+//! own rate. How fast the device takes samples is only reported (see `speed`).
 
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -129,15 +129,15 @@ pub fn run(device: Option<String>) -> i32 {
             if s.underruns > 0 {
                 why.push(format!("{} dropouts", s.underruns));
             }
-            if !speed_ok {
-                why.push(format!("device took {taken:.0} frames/s for a {} Hz stream", s.out_rate));
-            }
+            // only reported: a virtual device in a VM (BlackHole on CI) does not run at real
+            // speed, so frames/s says nothing there
+            let speed = if speed_ok { "" } else { " (speed off)" };
             if !native_ok {
                 why.push(format!("device ran at {:.0} Hz, not the song's {rate} Hz", dev_rate.unwrap_or(0.0)));
             }
             let verdict = if why.is_empty() { "ok".to_string() } else { failed = true; format!("FAIL: {}", why.join("; ")) };
             println!(
-                "{rate} Hz {bits}-bit {}: device {} Hz (buffer {} frames), stream {} Hz [{}], {taken:.0} frames/s, \
+                "{rate} Hz {bits}-bit {}: device {} Hz (buffer {} frames), stream {} Hz [{}], {taken:.0} frames/s{speed}, \
                  {} dropouts, {} late, {} callbacks × {} frames, longest callback {:.3} ms of {budget_ms:.2} ms, \
                  longest gap {:.2} ms — {verdict}",
                 if busy { "busy" } else { "idle" },
@@ -153,7 +153,7 @@ pub fn run(device: Option<String>) -> i32 {
                 s.cb_gap_max_ms,
             );
             rows.push(format!(
-                "| {rate} / {bits} | {} | {} | {} | {taken:.0} | {} | {:.3} / {budget_ms:.2} | {:.2} | {verdict} |",
+                "| {rate} / {bits} | {} | {} | {} | {taken:.0}{speed} | {} | {:.3} / {budget_ms:.2} | {:.2} | {verdict} |",
                 if busy { "busy" } else { "idle" },
                 dev_rate.map_or("?".into(), |d| format!("{d:.0}")),
                 s.out_rate,

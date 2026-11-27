@@ -13,6 +13,7 @@ mod media;
 mod mini;
 mod player;
 mod resample;
+mod ring;
 mod selftest;
 mod server;
 mod session;
