@@ -393,9 +393,39 @@ pub fn parse_lrc(text: &str) -> Vec<(Option<f64>, String)> {
     }
     if !timed.is_empty() {
         timed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        return timed.into_iter().map(|(t, s)| (Some(t), s)).collect();
+        return unsync_flat(timed.into_iter().map(|(t, s)| (Some(t), s)).collect());
     }
     plain.into_iter().map(|s| (None, s)).collect()
+}
+
+/// Lyrics whose lines all carry the same time are not really synced: the web server's
+/// metadata cache turned the `null` time of unsynced lines into 0, and "every line at
+/// 0:00" made the last line the active one (the view scrolled to the bottom). Such lines
+/// are returned as unsynced text.
+pub fn unsync_flat(lines: Vec<(Option<f64>, String)>) -> Vec<(Option<f64>, String)> {
+    let first = lines.first().and_then(|(t, _)| *t);
+    if lines.len() < 2 || first.is_none() || lines.iter().any(|(t, _)| *t != first) {
+        return lines;
+    }
+    lines.into_iter().map(|(_, s)| (None, s)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flat_times_are_unsynced() {
+        let flat = vec![(Some(0.0), "a".to_string()), (Some(0.0), "b".to_string())];
+        assert_eq!(unsync_flat(flat), vec![(None, "a".into()), (None, "b".into())]);
+        let mixed = vec![(Some(0.0), "a".to_string()), (None, "b".to_string())];
+        assert_eq!(unsync_flat(mixed.clone()), mixed);
+        let synced = vec![(Some(0.0), "a".to_string()), (Some(2.0), "b".to_string())];
+        assert_eq!(unsync_flat(synced.clone()), synced);
+        let one = vec![(Some(0.0), "a".to_string())];
+        assert_eq!(unsync_flat(one.clone()), one);
+        assert_eq!(parse_lrc("[00:00.00]a\n[00:00.00]b"), vec![(None, "a".into()), (None, "b".into())]);
+    }
 }
 
 fn parse_stamp(s: &str) -> Option<f64> {

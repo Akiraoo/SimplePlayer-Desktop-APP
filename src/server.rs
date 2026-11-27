@@ -243,9 +243,11 @@ pub fn lyrics(client: &Client, base: &str, id: &str) -> Vec<(Option<f64>, String
     let Ok(meta) = resp.json::<MetaResp>() else {
         return Vec::new();
     };
-    meta.lyrics
-        .into_iter()
-        .filter(|l| l.time.is_some() || !l.text.trim().is_empty())
-        .map(|l| (l.time.filter(|t| t.is_finite()), l.text))
-        .collect()
+    crate::library::unsync_flat(
+        meta.lyrics
+            .into_iter()
+            .filter(|l| l.time.is_some() || !l.text.trim().is_empty())
+            .map(|l| (l.time.filter(|t| t.is_finite()), l.text))
+            .collect(),
+    )
 }
