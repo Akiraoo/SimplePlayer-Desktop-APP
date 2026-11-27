@@ -8,6 +8,10 @@
 # Pushes are test builds: Apple Silicon only and the quicker "ci" profile (Cargo.toml).
 # A tag like v2.1.0 makes the real thing — universal (Apple Silicon + Intel), full release
 # optimisation — and attaches the .dmg to a draft GitHub Release with that tag.
+#
+# Run workflow with a tag (e.g. v2.1.1) builds that tag's code the release way with this
+# workflow and uploads the .dmg to that tag's existing release (it stays published): for a
+# release whose own tag build failed.
 name: Build
 
 on:
@@ -16,17 +20,24 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build the macOS .dmg for and upload to (empty = test build)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 # a newer push cancels the build still running for the same branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.tag }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  # set when run by hand for an existing release
+  RELEASE_TAG: ${{ inputs.tag }}
 
 jobs:
   macos:
@@ -36,6 +47,8 @@ jobs:
       FFMPEG_VERSION: n7.1.1
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -62,7 +75,7 @@ jobs:
 
       - name: Build Simple Player
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/v* || -n "$RELEASE_TAG" ]]; then
             # release: universal, full optimisation
             cargo build --release --target aarch64-apple-darwin
             cargo build --release --target x86_64-apple-darwin
@@ -115,7 +128,15 @@ jobs:
           draft: true
           files: dist/*.dmg
 
+      - name: Upload to the existing release
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" dist/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
+
   windows:
+    # not needed when only a release's .dmg is made
+    if: inputs.tag == ''
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
