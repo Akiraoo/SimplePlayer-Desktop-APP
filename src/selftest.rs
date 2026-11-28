@@ -97,12 +97,21 @@ pub fn run(device: Option<String>) -> i32 {
     for (rate, bits) in CASES {
         let tone = wav(rate, bits);
         for busy in [false, true] {
+            // open() is asynchronous: until the decoder takes it, position() is still the
+            // last test's. Stop first and wait for that, so the measurement never spans the
+            // switch (pause, cleared buffer, device changing rate).
+            player.stop();
+            let stopped = Instant::now();
+            while player.is_active() && stopped.elapsed() < Duration::from_secs(2) {
+                thread::sleep(Duration::from_millis(10));
+            }
             player.open(item(tone.clone()), false);
             let started = Instant::now();
-            while player.position() < 0.3 && started.elapsed() < Duration::from_secs(6) {
+            let playing = |p: &Player| p.is_active() && !p.is_paused() && p.position() >= 0.5;
+            while !playing(&player) && started.elapsed() < Duration::from_secs(6) {
                 thread::sleep(Duration::from_millis(20));
             }
-            if player.position() < 0.3 {
+            if !playing(&player) {
                 println!("{rate} Hz {bits}-bit: did not start playing");
                 rows.push(format!("| {rate} / {bits} | {} | did not start | | | | | | FAIL |", if busy { "busy" } else { "idle" }));
                 failed = true;
